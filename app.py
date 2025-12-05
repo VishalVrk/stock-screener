@@ -37,6 +37,254 @@ DAILY_DEV = 5.0
 MIN_FIB = 0.382
 MAX_FIB = 1.0
 
+# ==========================================
+# CANDLESTICK PATTERNS
+# ==========================================
+def check_candlestick_patterns(df):
+    """
+    Checks the LAST row of the dataframe for specific bullish patterns.
+    Returns: (bool, pattern_name)
+    """
+    if len(df) < 2:
+        return False, ""
+    
+    curr = df.iloc[-1]
+    prev = df.iloc[-2]
+    
+    body = abs(curr['Close'] - curr['Open'])
+    range_len = curr['High'] - curr['Low']
+    upper_shadow = curr['High'] - max(curr['Close'], curr['Open'])
+    lower_shadow = min(curr['Close'], curr['Open']) - curr['Low']
+    
+    if range_len == 0 or curr['Close'] == 0:
+        return False, ""
+
+    # 1. BULLISH ENGULFING
+    is_engulfing = (prev['Close'] < prev['Open']) and \
+                   (curr['Close'] > curr['Open']) and \
+                   (curr['Open'] <= prev['Close']) and \
+                   (curr['Close'] >= prev['Open'])
+    if is_engulfing:
+        return True, "Bullish Engulfing"
+
+    # 2. HAMMER
+    is_hammer = (lower_shadow >= 2 * body) and \
+                (upper_shadow <= body) and \
+                (body < 0.3 * range_len)
+    if is_hammer:
+        return True, "Hammer"
+
+    # 3. DRAGONFLY DOJI
+    is_doji_body = body <= (0.01 * curr['Close'])
+    is_dragonfly = is_doji_body and \
+                   (lower_shadow >= 0.6 * range_len) and \
+                   (upper_shadow <= 0.1 * range_len)
+    if is_dragonfly:
+        return True, "Dragonfly Doji"
+
+    # 4. LONG LEGGED DOJI + GREEN CANDLE
+    prev_body = abs(prev['Close'] - prev['Open'])
+    is_prev_doji = prev_body <= (0.01 * prev['Close'])
+    is_curr_green = curr['Close'] > curr['Open']
+    
+    if is_prev_doji and is_curr_green:
+        return True, "Long Legged Doji + Green"
+
+    return False, ""
+
+def calculate_zigzag_with_forming(df, deviation_pct=5):
+    """ZigZag with forming pivots included"""
+    tmp_df = df.copy()
+    tmp_df['Date'] = tmp_df.index
+    tmp_df = tmp_df.reset_index(drop=True)
+    deviation = deviation_pct / 100.0
+    pivots = []
+    
+    if len(tmp_df) < 5:
+        return pd.DataFrame()
+
+    trend = 1 if tmp_df.at[1, 'Close'] > tmp_df.at[0, 'Close'] else -1
+    last_pivot_val = tmp_df.at[0, 'Low'] if trend == 1 else tmp_df.at[0, 'High']
+    last_pivot_idx = 0
+    
+    for i in range(1, len(tmp_df)):
+        curr_high = tmp_df.at[i, 'High']
+        curr_low = tmp_df.at[i, 'Low']
+        
+        if trend == 1:
+            if curr_high > last_pivot_val:
+                last_pivot_val = curr_high
+                last_pivot_idx = i
+            elif curr_low < last_pivot_val * (1 - deviation):
+                pivots.append({'Date': tmp_df.at[last_pivot_idx, 'Date'], 'Value': last_pivot_val, 'Type': 'High'})
+                trend = -1
+                last_pivot_val = curr_low
+                last_pivot_idx = i
+        else:
+            if curr_low < last_pivot_val:
+                last_pivot_val = curr_low
+                last_pivot_idx = i
+            elif curr_high > last_pivot_val * (1 + deviation):
+                pivots.append({'Date': tmp_df.at[last_pivot_idx, 'Date'], 'Value': last_pivot_val, 'Type': 'Low'})
+                trend = 1
+                last_pivot_val = curr_high
+                last_pivot_idx = i
+    
+    # Add forming pivot
+    if trend == 1:
+        pivots.append({'Date': tmp_df.iloc[-1]['Date'], 'Value': tmp_df.iloc[-1]['High'], 'Type': 'Forming High'})
+    else:
+        pivots.append({'Date': tmp_df.iloc[-1]['Date'], 'Value': tmp_df.iloc[-1]['Low'], 'Type': 'Forming Low'})
+
+    return pd.DataFrame(pivots)
+
+def analyze_stock_candlestick(symbol):
+    """Analysis with candlestick pattern requirements"""
+    try:
+        socketio.emit('log', {
+            'message': f"📊 Analyzing {symbol}...",
+            'level': 'info',
+            'timestamp': datetime.now().strftime('%H:%M:%S')
+        })
+        session_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] 📊 Analyzing {symbol}...")
+        socketio.sleep(0)
+        
+        stock = yf.Ticker(symbol)
+        hist = stock.history(period="5y", interval="1d")
+        
+        if len(hist) < 250:
+            log_message = f"⚠️  {symbol}: Insufficient data"
+            socketio.emit('log', {'message': log_message, 'level': 'warning', 'timestamp': datetime.now().strftime('%H:%M:%S')})
+            session_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] {log_message}")
+            return None
+        
+        curr_price = hist['Close'].iloc[-1]
+        
+        # Check Candlestick Pattern First
+        has_candle, pattern_name = check_candlestick_patterns(hist)
+        if not has_candle:
+            log_message = f"✗ {symbol}: No candlestick pattern"
+            socketio.emit('log', {'message': log_message, 'level': 'error', 'timestamp': datetime.now().strftime('%H:%M:%S')})
+            session_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] {log_message}")
+            return None
+        
+        log_message = f"✓ {symbol}: Found {pattern_name}"
+        socketio.emit('log', {'message': log_message, 'level': 'success', 'timestamp': datetime.now().strftime('%H:%M:%S')})
+        session_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] {log_message}")
+        socketio.sleep(0)
+
+        # Monthly Structure
+        hist_monthly = hist.resample('ME').agg({'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last'})
+        m_pivots = calculate_zigzag_with_forming(hist_monthly, deviation_pct=MONTHLY_DEV)
+        
+        if len(m_pivots) < 3:
+            log_message = f"✗ {symbol}: Insufficient monthly pivots"
+            socketio.emit('log', {'message': log_message, 'level': 'error', 'timestamp': datetime.now().strftime('%H:%M:%S')})
+            session_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] {log_message}")
+            return None
+        
+        monthly_ok = False
+        confirmed_m = m_pivots[m_pivots['Type'].isin(['High', 'Low'])]
+        
+        if len(confirmed_m) < 2:
+            return None
+
+        last_conf_pivot = confirmed_m.iloc[-1]
+        
+        if last_conf_pivot['Type'] == 'High':
+            prev_highs = confirmed_m[confirmed_m['Type'] == 'High']
+            if len(prev_highs) < 2:
+                monthly_ok = True
+            else:
+                if prev_highs.iloc[-1]['Value'] > prev_highs.iloc[-2]['Value']:
+                    monthly_ok = True
+        
+        elif last_conf_pivot['Type'] == 'Low':
+            prev_lows = confirmed_m[confirmed_m['Type'] == 'Low']
+            prev_highs = confirmed_m[confirmed_m['Type'] == 'High']
+            
+            if len(prev_lows) >= 2 and len(prev_highs) >= 1:
+                curr_low = prev_lows.iloc[-1]['Value']
+                prev_low = prev_lows.iloc[-2]['Value']
+                high_between = prev_highs.iloc[-1]['Value']
+                
+                if curr_low > prev_low:
+                    if validate_fib(curr_low, prev_low, high_between):
+                        monthly_ok = True
+
+        if not monthly_ok:
+            log_message = f"✗ {symbol}: Failed monthly structure"
+            socketio.emit('log', {'message': log_message, 'level': 'error', 'timestamp': datetime.now().strftime('%H:%M:%S')})
+            session_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] {log_message}")
+            return None
+
+        # Daily Structure
+        d_pivots = calculate_zigzag_with_forming(hist, deviation_pct=DAILY_DEV)
+        d_conf = d_pivots[d_pivots['Type'].isin(['High', 'Low'])]
+        
+        d_highs = d_conf[d_conf['Type'] == 'High']
+        d_lows = d_conf[d_conf['Type'] == 'Low']
+        
+        if len(d_highs) < 2 or len(d_lows) < 2:
+            log_message = f"✗ {symbol}: Insufficient daily pivots"
+            socketio.emit('log', {'message': log_message, 'level': 'error', 'timestamp': datetime.now().strftime('%H:%M:%S')})
+            session_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] {log_message}")
+            return None
+        
+        last_hh = d_highs.iloc[-1]
+        prev_hh = d_highs.iloc[-2]
+        if last_hh['Value'] <= prev_hh['Value']:
+            return None
+        
+        last_hl = d_lows.iloc[-1]
+        prev_hl = d_lows.iloc[-2]
+        if last_hl['Value'] <= prev_hl['Value']:
+            return None
+        
+        relevant_high = d_highs[d_highs['Date'] < last_hl['Date']]
+        if relevant_high.empty:
+            return None
+        h_val = relevant_high.iloc[-1]['Value']
+        
+        relevant_low = d_lows[d_lows['Date'] < relevant_high.iloc[-1]['Date']]
+        if relevant_low.empty:
+            return None
+        l_val = relevant_low.iloc[-1]['Value']
+        
+        if not validate_fib(last_hl['Value'], l_val, h_val):
+            return None
+
+        last_pivot_type = d_conf.iloc[-1]['Type']
+        daily_ok = False
+        
+        if last_pivot_type == 'High':
+            if curr_price < last_hh['Value'] and curr_price > last_hl['Value']:
+                daily_ok = True
+        elif last_pivot_type == 'Low':
+            if curr_price < last_hh['Value']:
+                daily_ok = True
+        
+        if daily_ok:
+            log_message = f"🎯 {symbol}: QUALIFIED with {pattern_name}!"
+            socketio.emit('log', {'message': log_message, 'level': 'qualified', 'timestamp': datetime.now().strftime('%H:%M:%S')})
+            session_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] {log_message}")
+            socketio.sleep(0)
+            
+            return {
+                "Symbol": symbol,
+                "Price": round(curr_price, 2),
+                "Pattern": pattern_name,
+                "1M Structure": "Valid Bullish",
+                "1D Structure": "Valid HH/HL Series"
+            }
+
+    except Exception as e:
+        log_message = f"✗ {symbol}: Error - {str(e)}"
+        socketio.emit('log', {'message': log_message, 'level': 'error', 'timestamp': datetime.now().strftime('%H:%M:%S')})
+        session_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] {log_message}")
+        return None
+    return None
+
 def calculate_zigzag(df, deviation_pct=5):
     tmp_df = df.copy()
     tmp_df['Date'] = tmp_df.index
@@ -374,6 +622,10 @@ def analyze_stock(symbol):
 def index():
     return render_template('index.html')
 
+@app.route('/candlestick')
+def candlestick():
+    return render_template('candlestick.html')
+
 @app.route('/analyze', methods=['POST'])
 def analyze():
     if 'file' not in request.files:
@@ -507,6 +759,92 @@ def handle_processing(data):
     else:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         log_filename = f"analysis_log_{timestamp}.txt"
+        log_path = os.path.join(app.config['LOGS_FOLDER'], log_filename)
+        with open(log_path, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(session_logs))
+            
+        socketio.emit('complete', {
+            'success': True,
+            'count': 0,
+            'results': [],
+            'message': 'No stocks matched the criteria',
+            'log_filename': log_filename,
+            'timestamp': timestamp
+        })
+
+@socketio.on('start_processing_candlestick')
+def handle_processing_candlestick(data):
+    global session_logs
+    session_logs = []
+    
+    symbols = data.get('symbols', [])
+    
+    log_message = f"🚀 Starting candlestick analysis of {len(symbols)} stocks..."
+    socketio.emit('log', {'message': log_message, 'level': 'info', 'timestamp': datetime.now().strftime('%H:%M:%S')})
+    session_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] {log_message}")
+    socketio.sleep(0)
+    
+    log_message = f"📋 Configuration: Monthly Dev={MONTHLY_DEV}%, Daily Dev={DAILY_DEV}%"
+    socketio.emit('log', {'message': log_message, 'level': 'info', 'timestamp': datetime.now().strftime('%H:%M:%S')})
+    session_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] {log_message}")
+    socketio.sleep(0)
+    
+    log_message = "="*60
+    socketio.emit('log', {'message': log_message, 'level': 'info', 'timestamp': datetime.now().strftime('%H:%M:%S')})
+    session_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] {log_message}")
+    socketio.sleep(0)
+    
+    results = []
+    for idx, symbol in enumerate(symbols, 1):
+        log_message = f"\n[{idx}/{len(symbols)}] Processing {symbol}"
+        socketio.emit('log', {'message': log_message, 'level': 'info', 'timestamp': datetime.now().strftime('%H:%M:%S')})
+        session_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] {log_message}")
+        socketio.sleep(0)
+        
+        res = analyze_stock_candlestick(symbol)
+        if res:
+            results.append(res)
+        
+        socketio.emit('progress', {
+            'current': idx,
+            'total': len(symbols),
+            'percent': int((idx / len(symbols)) * 100)
+        })
+        socketio.sleep(0)
+    
+    log_message = "="*60
+    socketio.emit('log', {'message': log_message, 'level': 'info', 'timestamp': datetime.now().strftime('%H:%M:%S')})
+    session_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] {log_message}")
+    socketio.sleep(0)
+    
+    log_message = f"✅ Analysis complete! Found {len(results)} qualified stocks."
+    socketio.emit('log', {'message': log_message, 'level': 'success', 'timestamp': datetime.now().strftime('%H:%M:%S')})
+    session_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] {log_message}")
+    socketio.sleep(0)
+    
+    if results:
+        df_final = pd.DataFrame(results)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_filename = f"candlestick_screener_results_{timestamp}.csv"
+        output_path = os.path.join(app.config['OUTPUT_FOLDER'], output_filename)
+        df_final.to_csv(output_path, index=False)
+        
+        log_filename = f"candlestick_analysis_log_{timestamp}.txt"
+        log_path = os.path.join(app.config['LOGS_FOLDER'], log_filename)
+        with open(log_path, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(session_logs))
+        
+        socketio.emit('complete', {
+            'success': True,
+            'count': len(results),
+            'results': results,
+            'filename': output_filename,
+            'log_filename': log_filename,
+            'timestamp': timestamp
+        })
+    else:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        log_filename = f"candlestick_analysis_log_{timestamp}.txt"
         log_path = os.path.join(app.config['LOGS_FOLDER'], log_filename)
         with open(log_path, 'w', encoding='utf-8') as f:
             f.write('\n'.join(session_logs))

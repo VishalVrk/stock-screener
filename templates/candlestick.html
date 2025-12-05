@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Multi-Timeframe Stock Screener</title>
+    <title>Candlestick Pattern Screener</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
     <script>
@@ -13,7 +13,6 @@
                     animation: {
                         'fade-in': 'fadeIn 0.3s ease-in',
                         'slide-up': 'slideUp 0.3s ease-out',
-                        'pulse-slow': 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite',
                     },
                     keyframes: {
                         fadeIn: {
@@ -38,10 +37,10 @@
                 <div class="flex items-center space-x-8">
                     <span class="text-white font-bold text-xl">📈 Stock Screener</span>
                     <div class="flex space-x-4">
-                        <a href="/" class="text-white hover:bg-white/20 px-4 py-2 rounded-lg transition-all font-semibold bg-white/30">
+                        <a href="/" class="text-white hover:bg-white/20 px-4 py-2 rounded-lg transition-all font-semibold">
                             Multi-Timeframe
                         </a>
-                        <a href="/candlestick" class="text-white hover:bg-white/20 px-4 py-2 rounded-lg transition-all font-semibold">
+                        <a href="/candlestick" class="text-white hover:bg-white/20 px-4 py-2 rounded-lg transition-all font-semibold bg-white/30">
                             Candlestick Patterns
                         </a>
                     </div>
@@ -54,9 +53,18 @@
         <!-- Header -->
         <div class="text-center mb-10 animate-fade-in">
             <h1 class="text-5xl font-bold text-white mb-3 drop-shadow-lg">
-                📈 Multi-Timeframe Stock Screener
+                🕯️ Candlestick Pattern Screener
             </h1>
-            <p class="text-xl text-white/90">Advanced Fibonacci & ZigZag Analysis</p>
+            <p class="text-xl text-white/90">Advanced Pattern Recognition with Multi-Timeframe Analysis</p>
+            <div class="mt-4 bg-white/20 backdrop-blur-sm rounded-lg p-4 inline-block">
+                <p class="text-white text-sm font-semibold">Supported Patterns:</p>
+                <div class="flex gap-3 mt-2 flex-wrap justify-center">
+                    <span class="bg-green-500 text-white px-3 py-1 rounded-full text-xs">Bullish Engulfing</span>
+                    <span class="bg-green-500 text-white px-3 py-1 rounded-full text-xs">Hammer</span>
+                    <span class="bg-green-500 text-white px-3 py-1 rounded-full text-xs">Dragonfly Doji</span>
+                    <span class="bg-green-500 text-white px-3 py-1 rounded-full text-xs">Long Legged Doji + Green</span>
+                </div>
+            </div>
             <div id="connectionStatus" class="mt-2 text-sm text-white/80">
                 <span id="connectedIndicator" class="hidden">🟢 Connected</span>
                 <span id="disconnectedIndicator">🔴 Connecting...</span>
@@ -117,7 +125,7 @@
                 
                 <div id="resultsContent" class="mb-6"></div>
                 
-                <div class="flex gap-4 justify-center">
+                <div class="flex gap-4 justify-center flex-wrap">
                     <button id="downloadBtn" class="bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 text-white font-bold py-3 px-8 rounded-xl shadow-lg hover:shadow-xl transform hover:-translate-y-0.5 transition-all">
                         💾 Download CSV
                     </button>
@@ -150,7 +158,6 @@
     </div>
 
     <script>
-        // Initialize Socket.IO connection
         const socket = io({
             transports: ['websocket', 'polling'],
             reconnection: true,
@@ -189,7 +196,6 @@
         let currentResults = [];
         let currentTimestamp = '';
 
-        // Socket connection status
         socket.on('connect', () => {
             console.log('Socket.IO connected');
             connectedIndicator.classList.remove('hidden');
@@ -202,12 +208,6 @@
             disconnectedIndicator.classList.remove('hidden');
         });
 
-        socket.on('connect_error', (error) => {
-            console.error('Connection error:', error);
-            disconnectedIndicator.textContent = '🔴 Connection Error';
-        });
-
-        // Upload Area Events
         uploadArea.addEventListener('click', () => fileInput.click());
 
         uploadArea.addEventListener('dragover', (e) => {
@@ -274,13 +274,12 @@
         function startProcessing(symbols) {
             uploadSection.classList.add('hidden');
             processingSection.classList.remove('hidden');
-            logContent.innerHTML = ''; // Clear previous logs
+            logContent.innerHTML = '';
             
-            console.log('Emitting start_processing with', symbols.length, 'symbols');
-            socket.emit('start_processing', { symbols: symbols });
+            console.log('Emitting start_processing_candlestick with', symbols.length, 'symbols');
+            socket.emit('start_processing_candlestick', { symbols: symbols });
         }
 
-        // Socket Events
         socket.on('log', (data) => {
             console.log('Log received:', data);
             
@@ -344,12 +343,14 @@
                             <span class="text-3xl mr-4">ℹ️</span>
                             <div>
                                 <p class="font-bold text-lg">No Results Found</p>
-                                <p class="mt-1">No stocks matched the strict multi-timeframe criteria. Try adjusting the parameters or use a different dataset.</p>
+                                <p class="mt-1">No stocks matched the candlestick pattern criteria with multi-timeframe structure.</p>
                             </div>
                         </div>
                     </div>
                 `;
                 downloadBtn.classList.add('hidden');
+                downloadPdfBtn.classList.add('hidden');
+                downloadImageBtn.classList.add('hidden');
             } else {
                 let tableHTML = `
                     <div class="overflow-x-auto rounded-xl border border-gray-200">
@@ -358,41 +359,45 @@
                                 <tr>
                                     <th class="px-6 py-4 text-left font-semibold">Symbol</th>
                                     <th class="px-6 py-4 text-left font-semibold">Price</th>
+                                    <th class="px-6 py-4 text-left font-semibold">Candlestick Pattern</th>
                                     <th class="px-6 py-4 text-left font-semibold">Monthly Structure</th>
                                     <th class="px-6 py-4 text-left font-semibold">Daily Structure</th>
-                                    <th class="px-6 py-4 text-left font-semibold">Last HH</th>
-                                    <th class="px-6 py-4 text-left font-semibold">Last HL</th>
                                 </tr>
                             </thead>
                             <tbody class="divide-y divide-gray-200">
                 `;
 
                 data.results.forEach((stock, index) => {
-                    const monthlyBadge = stock['1M Structure'].includes('Phase A') 
-                        ? 'bg-blue-100 text-blue-800' 
-                        : 'bg-purple-100 text-purple-800';
-                    const dailyBadge = stock['1D Structure'].includes('Pullback') 
-                        ? 'bg-orange-100 text-orange-800' 
-                        : 'bg-green-100 text-green-800';
-                    
                     const rowClass = index % 2 === 0 ? 'bg-white' : 'bg-gray-50';
+                    
+                    const patternColors = {
+                        'Bullish Engulfing': 'bg-green-100 text-green-800',
+                        'Hammer': 'bg-blue-100 text-blue-800',
+                        'Dragonfly Doji': 'bg-purple-100 text-purple-800',
+                        'Long Legged Doji + Green': 'bg-yellow-100 text-yellow-800'
+                    };
+                    
+                    const patternClass = patternColors[stock.Pattern] || 'bg-gray-100 text-gray-800';
 
                     tableHTML += `
                         <tr class="${rowClass} hover:bg-indigo-50 transition-colors">
                             <td class="px-6 py-4 font-bold text-gray-900">${escapeHtml(stock.Symbol)}</td>
                             <td class="px-6 py-4 text-gray-700">₹${stock.Price}</td>
                             <td class="px-6 py-4">
-                                <span class="inline-flex items-center px-3 py-1 rounded-full text-sm font-semibold ${monthlyBadge}">
+                                <span class="inline-flex items-center px-3 py-1 rounded-full text-sm font-semibold ${patternClass}">
+                                    ${escapeHtml(stock.Pattern)}
+                                </span>
+                            </td>
+                            <td class="px-6 py-4">
+                                <span class="inline-flex items-center px-3 py-1 rounded-full text-sm font-semibold bg-emerald-100 text-emerald-800">
                                     ${escapeHtml(stock['1M Structure'])}
                                 </span>
                             </td>
                             <td class="px-6 py-4">
-                                <span class="inline-flex items-center px-3 py-1 rounded-full text-sm font-semibold ${dailyBadge}">
+                                <span class="inline-flex items-center px-3 py-1 rounded-full text-sm font-semibold bg-cyan-100 text-cyan-800">
                                     ${escapeHtml(stock['1D Structure'])}
                                 </span>
                             </td>
-                            <td class="px-6 py-4 text-gray-700">₹${stock['Last HH']}</td>
-                            <td class="px-6 py-4 text-gray-700">₹${stock['Last HL']}</td>
                         </tr>
                     `;
                 });
@@ -405,6 +410,8 @@
 
                 resultsContent.innerHTML = tableHTML;
                 downloadBtn.classList.remove('hidden');
+                downloadPdfBtn.classList.remove('hidden');
+                downloadImageBtn.classList.remove('hidden');
             }
         }
 
@@ -416,20 +423,15 @@
             try {
                 const response = await fetch('/export_pdf', {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        results: currentResults,
-                        timestamp: currentTimestamp
-                    })
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ results: currentResults, timestamp: currentTimestamp })
                 });
                 
                 const blob = await response.blob();
                 const url = window.URL.createObjectURL(blob);
                 const a = document.createElement('a');
                 a.href = url;
-                a.download = `screener_results_${currentTimestamp}.pdf`;
+                a.download = `candlestick_screener_${currentTimestamp}.pdf`;
                 document.body.appendChild(a);
                 a.click();
                 window.URL.revokeObjectURL(url);
@@ -443,20 +445,15 @@
             try {
                 const response = await fetch('/export_image', {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        results: currentResults,
-                        timestamp: currentTimestamp
-                    })
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ results: currentResults, timestamp: currentTimestamp })
                 });
                 
                 const blob = await response.blob();
                 const url = window.URL.createObjectURL(blob);
                 const a = document.createElement('a');
                 a.href = url;
-                a.download = `screener_results_${currentTimestamp}.png`;
+                a.download = `candlestick_screener_${currentTimestamp}.png`;
                 document.body.appendChild(a);
                 a.click();
                 window.URL.revokeObjectURL(url);
