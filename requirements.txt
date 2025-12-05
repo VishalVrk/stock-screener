@@ -1,0 +1,11 @@
+pandas
+yfinance
+numpy
+tqdm
+flask
+flask-socketio
+werkzeug
+python-socketio
+eventlet
+reportlab
+Pillow
